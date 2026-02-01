@@ -1,20 +1,28 @@
-import { StatusBar } from 'expo-status-bar';
-import { StyleSheet, Text, View } from 'react-native';
+import React from "react";
+import { NavigationContainer } from "@react-navigation/native";
+import { createNativeStackNavigator } from "@react-navigation/native-stack";
+import { PaperProvider } from "react-native-paper";
+
+import type { RootStackParamList } from "./src/navigation/types";
+import { InvoicesProvider } from "./src/store/invoices";
+import { InvoicesListScreen } from "./src/screens/InvoicesListScreen";
+import { ScanInvoiceScreen } from "./src/screens/ScanInvoiceScreen";
+import { InvoiceDetailScreen } from "./src/screens/InvoiceDetailScreen";
+
+const Stack = createNativeStackNavigator<RootStackParamList>();
 
 export default function App() {
   return (
-    <View style={styles.container}>
-      <Text>Open up App.tsx to start working on your app!</Text>
-      <StatusBar style="auto" />
-    </View>
+    <PaperProvider>
+      <InvoicesProvider>
+        <NavigationContainer>
+          <Stack.Navigator>
+            <Stack.Screen name="InvoicesList" component={InvoicesListScreen} options={{ title: "發票清單" }} />
+            <Stack.Screen name="ScanInvoice" component={ScanInvoiceScreen} options={{ title: "掃描發票" }} />
+            <Stack.Screen name="InvoiceDetail" component={InvoiceDetailScreen} options={{ title: "發票明細" }} />
+          </Stack.Navigator>
+        </NavigationContainer>
+      </InvoicesProvider>
+    </PaperProvider>
   );
 }
-
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#fff',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-});

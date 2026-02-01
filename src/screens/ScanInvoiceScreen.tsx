@@ -8,10 +8,17 @@ import {
   type BarcodeScanningResult,
   type BarcodeType,
 } from "expo-camera";
+import { useInvoices } from "../store/invoices";
+import { parseEInvoiceQRCodes } from "../parser/einvoice";
+import type { NativeStackScreenProps } from "@react-navigation/native-stack";
+import type { RootStackParamList } from "../navigation/types";
 
 type ScanStep = "scanning" | "processing" | "done";
 
 type Part = "LEFT" | "RIGHT";
+
+type Props = NativeStackScreenProps<RootStackParamList, "ScanInvoice">;
+
 
 function classifyPart(raw: string): Part {
   const s = raw.trim();
@@ -51,7 +58,7 @@ function uniqByData(results: BarcodeScanningResult[]) {
   return out;
 }
 
-export function ScanInvoiceScreen() {
+export function ScanInvoiceScreen({ navigation }: Props) {
   const [permission, requestPermission] = useCameraPermissions();
 
   const cameraRef = useRef<CameraView | null>(null);
@@ -60,6 +67,13 @@ export function ScanInvoiceScreen() {
   const [left, setLeft] = useState<string>("");
   const [right, setRight] = useState<string>("");
   const [errorMsg, setErrorMsg] = useState<string>("");
+
+  const { upsertInvoice } = useInvoices();
+  const onGenerate = () => {
+    const inv = parseEInvoiceQRCodes(left, right);
+    upsertInvoice(inv);
+    navigation.replace("InvoiceDetail", { invoiceId: inv.id });
+  };
 
   // 去抖：避免連點
   const inFlightRef = useRef(false);
@@ -209,6 +223,7 @@ export function ScanInvoiceScreen() {
           >
             一鍵拍照掃描
           </Button>
+          <Button mode="contained" disabled={step!=="done"} onPress={onGenerate}>產生清單</Button>
         </View>
       </Banner>
     </View>

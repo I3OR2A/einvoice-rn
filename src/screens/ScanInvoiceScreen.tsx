@@ -8,17 +8,17 @@ import {
   type BarcodeScanningResult,
   type BarcodeType,
 } from "expo-camera";
+import type { NativeStackScreenProps } from "@react-navigation/native-stack";
+
+import type { RootStackParamList } from "../navigation/types";
 import { useInvoices } from "../store/invoices";
 import { parseEInvoiceQRCodes } from "../parser/einvoice";
-import type { NativeStackScreenProps } from "@react-navigation/native-stack";
-import type { RootStackParamList } from "../navigation/types";
-
-type ScanStep = "scanning" | "processing" | "done";
-
-type Part = "LEFT" | "RIGHT";
 
 type Props = NativeStackScreenProps<RootStackParamList, "ScanInvoice">;
 
+type ScanStep = "ready" | "processing";
+
+type Part = "LEFT" | "RIGHT";
 
 function classifyPart(raw: string): Part {
   const s = raw.trim();
@@ -60,128 +60,155 @@ function uniqByData(results: BarcodeScanningResult[]) {
 
 export function ScanInvoiceScreen({ navigation }: Props) {
   const [permission, requestPermission] = useCameraPermissions();
+  const { save } = useInvoices();
 
   const cameraRef = useRef<CameraView | null>(null);
 
-  const [step, setStep] = useState<ScanStep>("scanning");
+  const [step, setStep] = useState<ScanStep>("ready");
   const [left, setLeft] = useState<string>("");
   const [right, setRight] = useState<string>("");
   const [errorMsg, setErrorMsg] = useState<string>("");
 
-  const { upsertInvoice } = useInvoices();
-  const onGenerate = () => {
-    const inv = parseEInvoiceQRCodes(left, right);
-    upsertInvoice(inv);
-    navigation.replace("InvoiceDetail", { invoiceId: inv.id });
-  };
-
-  // 去抖：避免連點
+  // 去抖：避免連點、避免同一輪流程重入
   const inFlightRef = useRef(false);
-
-  const hint = useMemo(() => {
-    if (step === "processing") return "📸 拍照中 / 掃描中…";
-    if (step === "done") return "✅ 已取得左右 QR，Day4 會開始解析";
-    if (!left && !right) return "把兩個 QR 一起放進鏡頭畫面內，按「一鍵拍照掃描」";
-    if (left && !right) return "只掃到主碼（LEFT），請再拍一次（確保兩顆 QR 都入鏡）";
-    if (!left && right) return "只掃到補碼（RIGHT），請再拍一次（確保兩顆 QR 都入鏡）";
-    return "準備就緒";
-  }, [step, left, right]);
 
   const reset = () => {
     setLeft("");
     setRight("");
     setErrorMsg("");
-    setStep("scanning");
+    setStep("ready");
     inFlightRef.current = false;
   };
 
-  const applyTwoResults = useCallback((a: BarcodeScanningResult, b: BarcodeScanningResult) => {
-    const aData = (a.data ?? "").trim();
-    const bData = (b.data ?? "").trim();
+  const hint = useMemo(() => {
+    if (step === "processing") return "📸 拍照中 / 掃描中…";
+    if (!left && !right) return "把兩個 QR 一起放進鏡頭畫面內，按「一鍵拍照掃描」";
+    if (left && !right) return "只掃到主碼（LEFT），請再拍一次（確保兩顆 QR 都入鏡）";
+    if (!left && right) return "只掃到補碼（RIGHT），請再拍一次（確保兩顆 QR 都入鏡）";
+    return "✅ 已取得左右 QR（將自動存檔並跳轉）";
+  }, [step, left, right]);
 
-    const aPart = classifyPart(aData);
-    const bPart = classifyPart(bData);
+  const finalize = useCallback(
+    (leftRaw: string, rightRaw: string) => {
+      // Day4 parser
+      const inv = parseEInvoiceQRCodes(leftRaw, rightRaw);
 
-    // 1) 內容規則最優先：** 開頭視為 RIGHT
-    if (aPart !== bPart) {
-      const leftRaw = aPart === "LEFT" ? aData : bData;
-      const rightRaw = aPart === "RIGHT" ? aData : bData;
-      setLeft(leftRaw);
-      setRight(normalizeRight(rightRaw));
-      setStep("done");
-      return;
+      // Week2 sqlite provider save
+      save(inv);
+
+      // 自動跳明細（解掉 cannot found navigation：這裡有正確 props）
+      navigation.replace("InvoiceDetail", { invoiceId: inv.id });
+    },
+    [navigation, save]
+  );
+
+  const pickLeftRightFromResults = useCallback((results: BarcodeScanningResult[]) => {
+    // 先用內容規則（** 開頭）判 RIGHT
+    let leftData = "";
+    let rightData = "";
+
+    for (const r of results) {
+      const d = (r.data ?? "").trim();
+      if (!d) continue;
+      const part = classifyPart(d);
+      if (part === "RIGHT" && !rightData) rightData = d;
+      if (part === "LEFT" && !leftData) leftData = d;
     }
 
-    // 2) fallback：用 x 座標排序（沒有就用原順序）
-    const ax = centerX(a);
-    const bx = centerX(b);
-
-    if (ax != null && bx != null) {
-      const [l, r] = ax <= bx ? [aData, bData] : [bData, aData];
-      setLeft(l);
-      setRight(normalizeRight(r));
-      setStep("done");
-      return;
+    if (leftData && rightData) {
+      return { left: leftData, right: normalizeRight(rightData) };
     }
 
-    // 3) 最後 fallback：用原順序（仍可用 Day4 parse 再做更嚴謹判斷）
-    setLeft(aData);
-    setRight(normalizeRight(bData));
-    setStep("done");
+    // 內容規則不足 → fallback 用 X 座標排序挑兩個
+    if (results.length >= 2) {
+      const a = results[0];
+      const b = results[1];
+
+      const ax = centerX(a);
+      const bx = centerX(b);
+
+      const aData = (a.data ?? "").trim();
+      const bData = (b.data ?? "").trim();
+
+      if (ax != null && bx != null) {
+        const [l, r] = ax <= bx ? [aData, bData] : [bData, aData];
+        return { left: l, right: normalizeRight(r) };
+      }
+
+      // 最後 fallback：順序（仍可用 parser 再容錯）
+      return { left: aData, right: normalizeRight(bData) };
+    }
+
+    // 只剩 0 或 1 筆：交給上層決定怎麼提示
+    return { left: leftData, right: normalizeRight(rightData) };
   }, []);
 
   const takePhotoAndScan = useCallback(async () => {
-    if (inFlightRef.current) return; // 去抖：避免連點
+    if (inFlightRef.current) return;
     if (step === "processing") return;
 
     setErrorMsg("");
-    inFlightRef.current = true;
     setStep("processing");
+    inFlightRef.current = true;
 
     try {
-      const refAny = cameraRef.current as any;
-      if (!refAny) throw new Error("camera ref not ready");
+      const camAny = cameraRef.current as any;
+      if (!camAny) throw new Error("camera not ready");
 
-      // 兼容不同版本方法名：takePictureAsync / takePicture
-      const take = refAny.takePictureAsync ?? refAny.takePicture;
+      // 兼容不同 Expo Camera 版本：takePictureAsync / takePicture
+      const take = camAny.takePictureAsync ?? camAny.takePicture;
       if (!take) throw new Error("takePictureAsync not available");
 
-      const photo = await take.call(refAny, {
-        quality: 0.8,
+      const photo = await take.call(camAny, {
+        quality: 0.85,
         base64: false,
-        // 若你想更快：可嘗試 skipProcessing: true（但可能有旋轉/EXIF 顯示問題）
+        // 想更快可以開，但少數機型可能有 EXIF/旋轉問題：
         // skipProcessing: true,
       });
 
       const uri: string | undefined = photo?.uri;
       if (!uri) throw new Error("photo uri missing");
 
-      // 從同一張照片掃出所有 QR（回傳陣列）
+      // 同張圖一次掃多顆（回傳陣列）
       const results = await scanFromURLAsync(uri, ["qr" as BarcodeType]);
       const uniq = uniqByData(results);
 
       if (uniq.length >= 2) {
-        applyTwoResults(uniq[0], uniq[1]);
-      } else if (uniq.length === 1) {
+        const picked = pickLeftRightFromResults(uniq);
+
+        // 更新 UI（可視化）
+        setLeft(picked.left);
+        setRight(picked.right);
+
+        // ✅ 直接 finalize：parse + save + navigate（0 額外操作）
+        finalize(picked.left, picked.right);
+        return;
+      }
+
+      if (uniq.length === 1) {
+        // 只掃到一顆：先存起來，提示再拍一次（不要求使用者判斷左右）
         const raw = (uniq[0].data ?? "").trim();
         const part = classifyPart(raw);
         if (part === "LEFT") setLeft((prev) => prev || raw);
         else setRight((prev) => prev || normalizeRight(raw));
-        setStep("scanning"); // 只掃到一顆，回到可再拍狀態
-      } else {
-        setErrorMsg("沒有掃到 QR，請提高亮度/拉近一點/確保兩顆 QR 都入鏡再拍一次");
-        setStep("scanning");
+
+        setStep("ready");
+        return;
       }
+
+      // 0 顆
+      setErrorMsg("沒有掃到 QR，請提高亮度/拉近一點/確保兩顆 QR 都入鏡再拍一次");
+      setStep("ready");
     } catch (e: any) {
       setErrorMsg(e?.message ?? "拍照或掃描失敗，請再試一次");
-      setStep("scanning");
+      setStep("ready");
     } finally {
-      // 允許再次按鈕（稍微延遲能避免誤觸連點）
+      // 小延遲解鎖，避免使用者誤觸連點
       setTimeout(() => {
         inFlightRef.current = false;
-      }, 600);
+      }, 500);
     }
-  }, [applyTwoResults, step]);
+  }, [finalize, pickLeftRightFromResults, step]);
 
   if (!permission?.granted) {
     return (
@@ -199,7 +226,7 @@ export function ScanInvoiceScreen({ navigation }: Props) {
       <CameraView
         ref={cameraRef}
         style={{ flex: 1 }}
-        // robust 模式：不靠即時 onBarcodeScanned（它一次只回一個）
+        // robust 模式：不依賴即時掃描 callback
         onBarcodeScanned={undefined}
         barcodeScannerSettings={{ barcodeTypes: ["qr"] }}
       />
@@ -216,14 +243,9 @@ export function ScanInvoiceScreen({ navigation }: Props) {
             重掃
           </Button>
 
-          <Button
-            mode="contained"
-            onPress={takePhotoAndScan}
-            disabled={step === "processing"}
-          >
+          <Button mode="contained" onPress={takePhotoAndScan} disabled={step === "processing"}>
             一鍵拍照掃描
           </Button>
-          <Button mode="contained" disabled={step!=="done"} onPress={onGenerate}>產生清單</Button>
         </View>
       </Banner>
     </View>

@@ -9,11 +9,13 @@ type Props = NativeStackScreenProps<RootStackParamList, "InvoiceDetail">;
 
 export function InvoiceDetailScreen({ route }: Props) {
   const { invoiceId } = route.params;
-  const { getInvoiceById } = useInvoices();
-  const inv = getInvoiceById(invoiceId);
+  const { getById } = useInvoices();
+  const inv = getById(invoiceId);
 
   const total = useMemo(() => {
     if (!inv) return 0;
+    // 若 DB 有 total 就優先用
+    if (typeof inv.total === "number") return inv.total;
     return inv.items.reduce((sum, it) => sum + it.qty * it.unitPrice, 0);
   }, [inv]);
 
@@ -35,7 +37,7 @@ export function InvoiceDetailScreen({ route }: Props) {
 
       {!hasItems && (
         <>
-          <Text style={{ marginBottom: 8 }}>解析失敗或沒有品項資料（先顯示 raw 供 debug）</Text>
+          <Text style={{ marginBottom: 8 }}>解析失敗或沒有品項資料（顯示 raw 供 debug）</Text>
           <Divider style={{ marginVertical: 8 }} />
           <Text selectable>LEFT: {inv.rawLeft}</Text>
           {inv.rawRight ? <Text selectable>RIGHT: {inv.rawRight}</Text> : null}
@@ -52,17 +54,14 @@ export function InvoiceDetailScreen({ route }: Props) {
               <DataTable.Title numeric>小計</DataTable.Title>
             </DataTable.Header>
 
-            {inv.items.map((it, idx) => {
-              const sub = it.qty * it.unitPrice;
-              return (
-                <DataTable.Row key={`${idx}_${it.name}`}>
-                  <DataTable.Cell style={{ flex: 2 }}>{it.name}</DataTable.Cell>
-                  <DataTable.Cell numeric>{it.qty}</DataTable.Cell>
-                  <DataTable.Cell numeric>{it.unitPrice}</DataTable.Cell>
-                  <DataTable.Cell numeric>{sub}</DataTable.Cell>
-                </DataTable.Row>
-              );
-            })}
+            {inv.items.map((it, idx) => (
+              <DataTable.Row key={`${idx}_${it.name}`}>
+                <DataTable.Cell style={{ flex: 2 }}>{it.name}</DataTable.Cell>
+                <DataTable.Cell numeric>{it.qty}</DataTable.Cell>
+                <DataTable.Cell numeric>{it.unitPrice}</DataTable.Cell>
+                <DataTable.Cell numeric>{it.qty * it.unitPrice}</DataTable.Cell>
+              </DataTable.Row>
+            ))}
           </DataTable>
 
           <Divider style={{ marginVertical: 12 }} />

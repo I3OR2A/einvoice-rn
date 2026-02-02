@@ -1,38 +1,58 @@
-import React, { createContext, useContext, useMemo, useState } from "react";
+import React, { createContext, useContext, useEffect, useMemo, useState } from "react";
 import type { Invoice } from "../domain/types";
+import { initDb } from "../storage/migrations";
+import { clearAllInvoices, getInvoiceById as repoGet, listInvoices, saveInvoice } from "../storage/invoice_repo";
+
+type InvoiceSummary = {
+  id: string;
+  createdAt: number;
+  total: number | null;
+  itemsCount: number;
+};
 
 type InvoicesContextValue = {
-  invoices: Invoice[];
-  upsertInvoice: (inv: Invoice) => void;
-  getInvoiceById: (id: string) => Invoice | undefined;
+  summaries: InvoiceSummary[];
+  refresh: () => void;
+  save: (inv: Invoice) => void;
+  getById: (id: string) => Invoice | null;
   clearAll: () => void;
 };
 
 const InvoicesContext = createContext<InvoicesContextValue | null>(null);
 
 export function InvoicesProvider({ children }: { children: React.ReactNode }) {
-  const [invoices, setInvoices] = useState<Invoice[]>([]);
+  const [summaries, setSummaries] = useState<InvoiceSummary[]>([]);
 
-  const upsertInvoice = (inv: Invoice) => {
-    setInvoices((prev) => {
-      const idx = prev.findIndex((x) => x.id === inv.id);
-      if (idx >= 0) {
-        const next = [...prev];
-        next[idx] = inv;
-        return next;
-      }
-      return [inv, ...prev];
-    });
+  const refresh = () => {
+    const rows = listInvoices(200);
+    setSummaries(
+      rows.map((r) => ({
+        id: r.id,
+        createdAt: r.created_at,
+        total: r.total,
+        itemsCount: r.items_count,
+      }))
+    );
   };
 
-  const getInvoiceById = (id: string) => invoices.find((x) => x.id === id);
+  useEffect(() => {
+    initDb();
+    refresh();
+  }, []);
 
-  const clearAll = () => setInvoices([]);
+  const save = (inv: Invoice) => {
+    saveInvoice(inv);
+    refresh();
+  };
 
-  const value = useMemo(
-    () => ({ invoices, upsertInvoice, getInvoiceById, clearAll }),
-    [invoices]
-  );
+  const getById = (id: string) => repoGet(id);
+
+  const clearAll = () => {
+    clearAllInvoices();
+    refresh();
+  };
+
+  const value = useMemo(() => ({ summaries, refresh, save, getById, clearAll }), [summaries]);
 
   return <InvoicesContext.Provider value={value}>{children}</InvoicesContext.Provider>;
 }

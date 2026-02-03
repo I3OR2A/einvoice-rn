@@ -1,0 +1,75 @@
+name: Release (tag -> GitHub Releases)
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Prepare variables
+        id: vars
+        run: |
+          echo "TAG=${GITHUB_REF_NAME}" >> $GITHUB_ENV
+          echo "VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_ENV
+
+      - name: Build release zip
+        run: |
+          chmod +x scripts/build_release.sh
+          ./scripts/build_release.sh "${TAG}"
+          ls -al dist
+
+      # Release Notes: 如果有自訂檔案就用；沒有就自動生成
+      - name: Generate release notes (custom or auto)
+        run: |
+          NOTES_DIR=".github/release-notes"
+          CUSTOM_PATH="${NOTES_DIR}/${TAG}.md"
+          OUT_PATH="dist/release_notes.md"
+
+          mkdir -p dist
+
+          if [ -f "${CUSTOM_PATH}" ]; then
+            echo "✅ Using custom release notes: ${CUSTOM_PATH}"
+            cp "${CUSTOM_PATH}" "${OUT_PATH}"
+          else
+            echo "ℹ️ No custom notes found at ${CUSTOM_PATH}, generating from git log..."
+            PREV_TAG="$(git tag --sort=-creatordate | grep -E '^v' | grep -v "^${TAG}$" | head -n 1 || true)"
+
+            {
+              echo "## ${TAG}"
+              echo ""
+              if [ -n "${PREV_TAG}" ]; then
+                echo "Changes since ${PREV_TAG}:"
+                echo ""
+                git log --pretty=format:"- %s (%h)" "${PREV_TAG}..${TAG}"
+              else
+                echo "Changes:"
+                echo ""
+                git log --pretty=format:"- %s (%h)" "${TAG}"
+              fi
+              echo ""
+            } > "${OUT_PATH}"
+          fi
+
+          echo "----- release_notes.md -----"
+          cat "${OUT_PATH}"
+
+      - name: Create GitHub Release and upload asset
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.TAG }}
+          name: ${{ env.TAG }}
+          body_path: dist/release_notes.md
+          files: |
+            dist/einvoice-rn-v${{ env.VERSION }}.zip

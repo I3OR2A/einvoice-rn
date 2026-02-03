@@ -13,6 +13,11 @@ import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import type { RootStackParamList } from "../navigation/types";
 import { useInvoices } from "../store/invoices";
 import { parseEInvoiceQRCodes } from "../parser/einvoice";
+import { StyleSheet } from "react-native";
+import { Surface, Chip } from "react-native-paper";
+import { Screen } from "../components/Screen";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { useTheme } from "react-native-paper";
 
 type Props = NativeStackScreenProps<RootStackParamList, "ScanInvoice">;
 
@@ -69,6 +74,9 @@ export function ScanInvoiceScreen({ navigation }: Props) {
   const [right, setRight] = useState<string>("");
   const [errorMsg, setErrorMsg] = useState<string>("");
 
+  const insets = useSafeAreaInsets();
+  const theme = useTheme();
+
   // 去抖：避免連點、避免同一輪流程重入
   const inFlightRef = useRef(false);
 
@@ -82,9 +90,12 @@ export function ScanInvoiceScreen({ navigation }: Props) {
 
   const hint = useMemo(() => {
     if (step === "processing") return "📸 拍照中 / 掃描中…";
-    if (!left && !right) return "把兩個 QR 一起放進鏡頭畫面內，按「一鍵拍照掃描」";
-    if (left && !right) return "只掃到主碼（LEFT），請再拍一次（確保兩顆 QR 都入鏡）";
-    if (!left && right) return "只掃到補碼（RIGHT），請再拍一次（確保兩顆 QR 都入鏡）";
+    if (!left && !right)
+      return "把兩個 QR 一起放進鏡頭畫面內，按「一鍵拍照掃描」";
+    if (left && !right)
+      return "只掃到主碼（LEFT），請再拍一次（確保兩顆 QR 都入鏡）";
+    if (!left && right)
+      return "只掃到補碼（RIGHT），請再拍一次（確保兩顆 QR 都入鏡）";
     return "✅ 已取得左右 QR（將自動存檔並跳轉）";
   }, [step, left, right]);
 
@@ -99,49 +110,52 @@ export function ScanInvoiceScreen({ navigation }: Props) {
       // 自動跳明細（解掉 cannot found navigation：這裡有正確 props）
       navigation.replace("InvoiceDetail", { invoiceId: inv.id });
     },
-    [navigation, save]
+    [navigation, save],
   );
 
-  const pickLeftRightFromResults = useCallback((results: BarcodeScanningResult[]) => {
-    // 先用內容規則（** 開頭）判 RIGHT
-    let leftData = "";
-    let rightData = "";
+  const pickLeftRightFromResults = useCallback(
+    (results: BarcodeScanningResult[]) => {
+      // 先用內容規則（** 開頭）判 RIGHT
+      let leftData = "";
+      let rightData = "";
 
-    for (const r of results) {
-      const d = (r.data ?? "").trim();
-      if (!d) continue;
-      const part = classifyPart(d);
-      if (part === "RIGHT" && !rightData) rightData = d;
-      if (part === "LEFT" && !leftData) leftData = d;
-    }
-
-    if (leftData && rightData) {
-      return { left: leftData, right: normalizeRight(rightData) };
-    }
-
-    // 內容規則不足 → fallback 用 X 座標排序挑兩個
-    if (results.length >= 2) {
-      const a = results[0];
-      const b = results[1];
-
-      const ax = centerX(a);
-      const bx = centerX(b);
-
-      const aData = (a.data ?? "").trim();
-      const bData = (b.data ?? "").trim();
-
-      if (ax != null && bx != null) {
-        const [l, r] = ax <= bx ? [aData, bData] : [bData, aData];
-        return { left: l, right: normalizeRight(r) };
+      for (const r of results) {
+        const d = (r.data ?? "").trim();
+        if (!d) continue;
+        const part = classifyPart(d);
+        if (part === "RIGHT" && !rightData) rightData = d;
+        if (part === "LEFT" && !leftData) leftData = d;
       }
 
-      // 最後 fallback：順序（仍可用 parser 再容錯）
-      return { left: aData, right: normalizeRight(bData) };
-    }
+      if (leftData && rightData) {
+        return { left: leftData, right: normalizeRight(rightData) };
+      }
 
-    // 只剩 0 或 1 筆：交給上層決定怎麼提示
-    return { left: leftData, right: normalizeRight(rightData) };
-  }, []);
+      // 內容規則不足 → fallback 用 X 座標排序挑兩個
+      if (results.length >= 2) {
+        const a = results[0];
+        const b = results[1];
+
+        const ax = centerX(a);
+        const bx = centerX(b);
+
+        const aData = (a.data ?? "").trim();
+        const bData = (b.data ?? "").trim();
+
+        if (ax != null && bx != null) {
+          const [l, r] = ax <= bx ? [aData, bData] : [bData, aData];
+          return { left: l, right: normalizeRight(r) };
+        }
+
+        // 最後 fallback：順序（仍可用 parser 再容錯）
+        return { left: aData, right: normalizeRight(bData) };
+      }
+
+      // 只剩 0 或 1 筆：交給上層決定怎麼提示
+      return { left: leftData, right: normalizeRight(rightData) };
+    },
+    [],
+  );
 
   const takePhotoAndScan = useCallback(async () => {
     if (inFlightRef.current) return;
@@ -197,7 +211,9 @@ export function ScanInvoiceScreen({ navigation }: Props) {
       }
 
       // 0 顆
-      setErrorMsg("沒有掃到 QR，請提高亮度/拉近一點/確保兩顆 QR 都入鏡再拍一次");
+      setErrorMsg(
+        "沒有掃到 QR，請提高亮度/拉近一點/確保兩顆 QR 都入鏡再拍一次",
+      );
       setStep("ready");
     } catch (e: any) {
       setErrorMsg(e?.message ?? "拍照或掃描失敗，請再試一次");
@@ -213,7 +229,9 @@ export function ScanInvoiceScreen({ navigation }: Props) {
   if (!permission?.granted) {
     return (
       <View style={{ flex: 1, padding: 16, justifyContent: "center" }}>
-        <Text style={{ marginBottom: 12 }}>需要相機權限才能掃描發票 QR Code</Text>
+        <Text style={{ marginBottom: 12 }}>
+          需要相機權限才能掃描發票 QR Code
+        </Text>
         <Button mode="contained" onPress={requestPermission}>
           允許相機權限
         </Button>
@@ -222,32 +240,111 @@ export function ScanInvoiceScreen({ navigation }: Props) {
   }
 
   return (
-    <View style={{ flex: 1 }}>
-      <CameraView
-        ref={cameraRef}
-        style={{ flex: 1 }}
-        // robust 模式：不依賴即時掃描 callback
-        onBarcodeScanned={undefined}
-        barcodeScannerSettings={{ barcodeTypes: ["qr"] }}
-      />
+    <Screen>
+      <View style={{ flex: 1 }}>
+        <CameraView
+          ref={cameraRef}
+          style={{ flex: 1 }}
+          // robust 模式：不依賴即時掃描 callback
+          onBarcodeScanned={undefined}
+          barcodeScannerSettings={{ barcodeTypes: ["qr"] }}
+        />
 
-      <Banner visible={true} style={{ position: "absolute", left: 0, right: 0, bottom: 0 }}>
-        <Text style={{ marginBottom: 6 }}>{hint}</Text>
-        {!!errorMsg && <Text style={{ marginBottom: 6 }}>⚠️ {errorMsg}</Text>}
+        <Surface
+          style={[styles.bottomSheet, { bottom: 12 + insets.bottom, backgroundColor: theme.colors.elevation.level2 }]}
+          elevation={3}
+        >
+          <Text variant="bodyMedium" style={styles.hintText}>
+            {hint}
+          </Text>
 
-        <Text numberOfLines={1}>LEFT：{left ? "✅ 已取得" : "—"}</Text>
-        <Text numberOfLines={1}>RIGHT：{right ? "✅ 已取得" : "—"}</Text>
+          {!!errorMsg && <Text style={styles.errorText}>⚠️ {errorMsg}</Text>}
 
-        <View style={{ flexDirection: "row", gap: 8, marginTop: 8 }}>
-          <Button mode="outlined" onPress={reset} disabled={step === "processing"}>
-            重掃
-          </Button>
+          <View style={styles.statusRow}>
+            <Chip
+              icon={left ? "check" : "minus"}
+              style={styles.chip}
+              textStyle={styles.chipText}
+              compact
+            >
+              LEFT {left ? "已取得" : "—"}
+            </Chip>
 
-          <Button mode="contained" onPress={takePhotoAndScan} disabled={step === "processing"}>
-            一鍵拍照掃描
-          </Button>
-        </View>
-      </Banner>
-    </View>
+            <Chip
+              icon={right ? "check" : "minus"}
+              style={styles.chip}
+              textStyle={styles.chipText}
+              compact
+            >
+              RIGHT {right ? "已取得" : "—"}
+            </Chip>
+          </View>
+
+          <View style={styles.actionsRow}>
+            <Button
+              mode="outlined"
+              onPress={reset}
+              disabled={step === "processing"}
+              style={styles.actionBtn}
+              contentStyle={styles.actionBtnContent}
+            >
+              重掃
+            </Button>
+
+            <Button
+              mode="contained"
+              onPress={takePhotoAndScan}
+              disabled={step === "processing"}
+              style={styles.actionBtn}
+              contentStyle={styles.actionBtnContent}
+            >
+              一鍵拍照掃描
+            </Button>
+          </View>
+        </Surface>
+      </View>
+    </Screen>
   );
 }
+
+const styles = StyleSheet.create({
+  bottomSheet: {
+    position: "absolute",
+    left: 12,
+    right: 12,
+    bottom: 12,
+    borderRadius: 16,
+    padding: 12,
+  },
+  hintText: {
+    marginBottom: 8,
+    lineHeight: 20,
+  },
+  errorText: {
+    marginTop: -2,
+    marginBottom: 8,
+  },
+  statusRow: {
+    flexDirection: "row",
+    gap: 8,
+    marginBottom: 10,
+  },
+  chip: {
+    flex: 1,
+    justifyContent: "center",
+  },
+  chipText: {
+    fontSize: 12,
+  },
+  actionsRow: {
+    flexDirection: "row",
+    gap: 10,
+  },
+  actionBtn: {
+    flex: 1,
+    borderRadius: 12,
+  },
+  actionBtnContent: {
+    height: 44,
+  },
+});
